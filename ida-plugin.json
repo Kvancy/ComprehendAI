@@ -1,0 +1,7 @@
+{
+  "IDAMetadataDescriptorVersion": 1,
+  "plugin": {
+    "name": "IDA ComprehendAI",
+    "entryPoint": "ComprehendAI.py"
+  }
+}

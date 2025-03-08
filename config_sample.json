@@ -1,0 +1,7 @@
+{
+    "openai": {
+        "model": "qwq-32b",
+        "api_key": "sk-",
+        "base_url": "https://"
+    }
+}

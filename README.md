@@ -36,8 +36,11 @@ Open the `config.json` file. You will see a content structure similar to the fol
 
 ```json
 {
-    "api_key": "",
-    "base_url": ""
+    "openai"{
+        "model":"",
+        "api_key": "",
+        "base_url": ""
+    }
 }
 ```
 
@@ -45,8 +48,11 @@ Replace the content within the double - quotes with your own `api_key` and `base
 
 ```json
 {
-    "api_key": "your_actual_api_key",
-    "base_url": "your_actual_base_url"
+    "openai"{
+        "model":"",
+        "api_key": "your_actual_api_key",
+        "base_url": "your_actual_base_url"
+    }
 }
 ```
 
