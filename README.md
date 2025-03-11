@@ -7,14 +7,15 @@ An AI plugin for assisting IDA reverse analysis, which facilitates quickly summa
 ### Non - blocking AI Analysis
 - **Description**: This feature enables non - blocking AI analysis. While the analysis is in progress, you can continue with your work uninterrupted. Once the analysis is completed, the results will be printed in the output window.
 
-### Blocking AI Analysis 
-- **Description**: With blocking AI analysis, the results are directly annotated at the function header.
-
 ### Customizable Function Analysis Depth
 - **Description**: You have the flexibility to set the depth of function analysis according to your needs. 
 
 ### Manual Interaction with AI
 - **Description**: You can manually ask the AI various questions and perform any operations you prefer. 
+
+### Support for Streaming Output with Inference Models
+
+- **Description**: Supports the use of inference models with streaming output.  Get continuous results as the model processes data.
 
 ## Usage
 
@@ -90,6 +91,8 @@ You can set the depth of function analysis by yourself. If the depth of function
 
 You can also manually ask the AI some questions and do whatever you like.
 
-![image-20250305103616271](imgs/README/image-20250305103616271.png)
+![image-20250311100723998](imgs/README/image-20250311100723998.png)
 
-![image-20250305103636396](imgs/README/image-20250305103636396.png)
+Supports the use of inference models with streaming output.
+
+![image-20250311101026041](imgs/README/image-20250311101026041.png)
