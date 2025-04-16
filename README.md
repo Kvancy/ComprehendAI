@@ -82,21 +82,21 @@ Right - click on the disassembly window to pop up the menu and select a function
 
 Analysis allows you to continue your work, and then the results will be printed in the output window.
 
-![image-20250416205310491](../imgs/README/image-20250416205310491.png)
+![image-20250416205310491](./imgs/README/image-20250416205310491.png)
 
 You can set the depth of function analysis by yourself. If you're only interested in the current function or you have to consider the tokens consumption, just set the depth to 0.
 
-![image-20250416205344433](../imgs/README/image-20250416205344433.png)
+![image-20250416205344433](./imgs/README/image-20250416205344433.png)
 
 You can also manually ask the AI some questions and do whatever you like,Or ask questions while referring to the code. 
 
-![image-20250416205428185](../imgs/README/image-20250416205428185.png)
+![image-20250416205428185](./imgs/README/image-20250416205428185.png)
 
 You can easily pause the output whenever you want.  
 
-![image-20250416205722302](../imgs/README/image-20250416205722302.png)
+![image-20250416205722302](./imgs/README/image-20250416205722302.png)
 
 You have the freedom to customize the prompt according to your needs for the moment.
 
-![image-20250416205552353](../imgs/README/image-20250416205552353.png)
+![image-20250416205552353](./imgs/README/image-20250416205552353.png)
 
