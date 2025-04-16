@@ -4,18 +4,23 @@ An AI plugin for assisting IDA reverse analysis, which facilitates quickly summa
 
 ## Features
 
-### Non - blocking AI Analysis
-- **Description**: This feature enables non - blocking AI analysis. While the analysis is in progress, you can continue with your work uninterrupted. Once the analysis is completed, the results will be printed in the output window.
+**Non - blocking AI Analysis**
 
-### Customizable Function Analysis Depth
-- **Description**: You have the flexibility to set the depth of function analysis according to your needs. 
+- Description: This feature enables non - blocking AI analysis. While the analysis is in progress, you can continue with your work uninterrupted. Once the analysis is completed, the results will be printed in the output window.
 
-### Manual Interaction with AI
-- **Description**: You can manually ask the AI various questions and perform any operations you prefer. 
+**Customizable Function Analysis Depth**
 
-### Support for Streaming Output with Inference Models
+- Description: You have the flexibility to set the depth of function analysis according to your needs. 
 
-- **Description**: Supports the use of inference models with streaming output.  Get continuous results as the model processes data.
+**Manual Interaction with AI**
+
+- Description: You can manually ask the AI various questions and perform any operations you prefer. 
+
+**Support for Streaming Output with Inference Models**
+
+- Description: Supports the use of inference models with streaming output.  Get continuous results as the model processes data.
+
+
 
 ## Usage
 
@@ -69,30 +74,29 @@ pip install openai
 
 #### 4. Launch IDA and Load the Plugin
 
+It has been successfully tested in IDA 9.1 and IDA 7.7.
 
-
-## Example
+###  Example
 
 Right - click on the disassembly window to pop up the menu and select a function.
 
-Non - blocking AI analysis allows you to continue your work, and then the results will be printed in the output window.
+Analysis allows you to continue your work, and then the results will be printed in the output window.
 
-![{90B305AB-0BF0-498B-8924-0E444FFCB706}](imgs/README/{90B305AB-0BF0-498B-8924-0E444FFCB706}.png)
+![image-20250416205310491](../imgs/README/image-20250416205310491.png)
 
-![image-20250305102935533](imgs/README/image-20250305102935533.png)
+You can set the depth of function analysis by yourself. If you're only interested in the current function or you have to consider the tokens consumption, just set the depth to 0.
 
-Blocking AI analysis can directly add comments with the results at the function header, but it will block your work.
+![image-20250416205344433](../imgs/README/image-20250416205344433.png)
 
-![image-20250305103259280](imgs/README/image-20250305103259280.png)
+You can also manually ask the AI some questions and do whatever you like,Or ask questions while referring to the code. 
 
-You can set the depth of function analysis by yourself. If the depth of function analysis is set too large, you need to ensure that the AI can handle such a large amount of output.
+![image-20250416205428185](../imgs/README/image-20250416205428185.png)
 
-![image-20250305103453813](imgs/README/image-20250305103453813.png)
+You can easily pause the output whenever you want.  
 
-You can also manually ask the AI some questions and do whatever you like.
+![image-20250416205722302](../imgs/README/image-20250416205722302.png)
 
-![image-20250311100723998](imgs/README/image-20250311100723998.png)
+You have the freedom to customize the prompt according to your needs for the moment.
 
-Supports the use of inference models with streaming output.
+![image-20250416205552353](../imgs/README/image-20250416205552353.png)
 
-![image-20250311101026041](imgs/README/image-20250311101026041.png)

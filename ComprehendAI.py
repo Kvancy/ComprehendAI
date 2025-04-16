@@ -5,145 +5,261 @@ import idautils
 import ida_xref
 import json
 import os
+import asyncio
+
 from idaapi import action_handler_t, UI_Hooks
-from threading import Thread
+from threading import Lock,Thread,Event
 from openai import OpenAI
+from enum import Enum
 
-processed_funcs = set()
-FuncDisasmList = []
-depth = 2
+class TaskType(Enum):
+    ANALYSIS = 1
+    CUSTOM_QUERY = 2
+    CUSTON_QUERY_WITH_CODE = 3
 
+class QueryStatus(Enum):
+    SUCCESS = 1
+    FAILED = 2
+    STOPPED = 3
 
-# 获取当前脚本所在目录
-script_path = os.path.abspath(__file__)
-script_dir = os.path.dirname(script_path)
-config_path = os.path.join(script_dir, 'config.json')
-print(config_path)
-
-# OpenAI 客户端初始化
-with open(config_path, "r") as f:
-    config = json.load(f)
-
-MODEL_NAME = config["openai"]["model"]
-client = OpenAI(api_key=config["openai"]["api_key"], base_url=config["openai"]["base_url"])
-
-# 动作常量
-ACTION_ANALYSIS_1 = "AI_analysis:Blocking analysis"
-ACTION_ANALYSIS_2 = "AI_analysis:Non-blocking analysis"
-ACTION_SETDEPTH = "AI_analysis:Set depth"
-ACTION_ASK = "AI_analysis:Ask"
-
-def get_callees(func_ea):
-    callees = set()
-    for ea in range(func_ea, idc.get_func_attr(func_ea, idc.FUNCATTR_END)):
-        for xref in idautils.XrefsFrom(ea):
-            if xref.type in [ida_xref.fl_CN, ida_xref.fl_CF]:
-                callee_ea = xref.to
-                if idc.get_func_attr(callee_ea, idc.FUNCATTR_START) == callee_ea:
-                    callees.add(callee_ea)
-    return callees
-
-def get_all_disasm(func_ea, max_depth=None):
-    if func_ea in processed_funcs:
-        return
-    processed_funcs.add(func_ea)
+#处理配置文件
+class ConfigManager:
+    _instance = None
+    _lock = Lock()
     
-    try:
-        FuncDisasmList.append(str(idaapi.decompile(func_ea)))
-    except Exception as e:
-        print(f"Failed to decompile function at address {func_ea}: {e}")
+    def __new__(cls):
+        with cls._lock:
+            if not cls._instance:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialize()
+            return cls._instance
     
-    if max_depth is not None:
-        if max_depth <= 0:
+    def _initialize(self):
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.config_path = os.path.join(self.script_dir, 'config.json')
+        self.config = self._load_config()
+        self.openai_client = self._create_openai_client()
+        
+    def _load_config(self):
+        try:
+            with open(self.config_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load config: {str(e)}")
+    
+    def _create_openai_client(self):
+        return OpenAI(
+            api_key=self.config["openai"]["api_key"],
+            base_url=self.config["openai"]["base_url"]
+        )
+    
+    @property
+    def model_name(self):
+        return self.config["openai"]["model"]
+    
+    @property
+    def client(self):
+        return self.openai_client
+#处理反汇编代码提取
+class DisassemblyProcessor:
+    def __init__(self, max_depth=2):
+        self.max_depth = max_depth
+        self._lock = Lock()
+        self._reset_state()
+        
+    def _reset_state(self):
+        with self._lock:
+            self.processed_funcs = set()
+            self.func_disasm_list = []
+    
+    def get_current_function_disasm(self):
+        self._reset_state()
+        
+        current_ea = idc.get_screen_ea()
+        func_start = idc.get_func_attr(current_ea, idc.FUNCATTR_START)
+        
+        if func_start == idaapi.BADADDR:
+            raise ValueError("Failed to locate function start address")
+            
+        self._process_function(func_start, self.max_depth)
+        return "\n".join(self.func_disasm_list)
+    
+    def _process_function(self, func_ea, depth):
+        if func_ea in self.processed_funcs or depth < 0:
             return
-        next_depth = max_depth - 1
-    else:
-        next_depth = None
+            
+        with self._lock:
+            self.processed_funcs.add(func_ea)
+        
+        try:
+            decompiled = str(idaapi.decompile(func_ea))
+            with self._lock:
+                self.func_disasm_list.append(decompiled)
+        except Exception as e:
+            print(f"Decompilation failed for {hex(func_ea)}: {str(e)}")
+        
+        for callee in self._get_callees(func_ea):
+            self._process_function(callee, depth - 1)
     
-    for callee_ea in get_callees(func_ea):
-        get_all_disasm(callee_ea, next_depth)
+    def _get_callees(self, func_ea):
+        callees = set()
+        for ea in range(func_ea, idc.get_func_attr(func_ea, idc.FUNCATTR_END)):
+            for xref in idautils.XrefsFrom(ea):
+                if xref.type in [ida_xref.fl_CN, ida_xref.fl_CF]:
+                    callee_ea = xref.to
+                    if idc.get_func_attr(callee_ea, idc.FUNCATTR_START) == callee_ea:
+                        callees.add(callee_ea)
+        return callees
+#处理openai接口相关
+class AIService:
+    def __init__(self):
+        self.config = ConfigManager()
+        self.stop_event = Event()
 
-def get_this_func_disasm(depth):
-    processed_funcs.clear()
-    FuncDisasmList.clear()
-    current_ea = idc.get_screen_ea()
-    func_start = idc.get_func_attr(current_ea, idc.FUNCATTR_START)
-    if func_start != idaapi.BADADDR:
-        get_all_disasm(func_start, max_depth=depth)
-    else:
-        print("无法定位函数起始地址")
-    
-    disasm_all = "\n".join(FuncDisasmList)
-    return disasm_all
+    def ask_ai(self, prompt, ai_isRunning:Lock):
+        messages = [{"role": "user", "content": prompt}]
+        print("ComprehendAI output:")
+        self.stop_event.clear() #初始化事件
+            
+        result = self._request_openai(messages)
+        ai_isRunning.release()  # 分析完成，无论成功失败都需释放锁
 
-def ask(messages):
-    reasoning_content = ""
-    answer_content = ""
-    is_answering = False
-    try:
-        completion = client.chat.completions.create(
-            model=MODEL_NAME,
+        match result:
+            case QueryStatus.SUCCESS:
+                print("\r✅ 分析完成！")
+            case QueryStatus.FAILED:
+                print("\r❌ 分析失败，请重试")
+            case QueryStatus.STOPPED:
+                print("\r✅ 分析暂停")
+                
+
+    def _request_openai(self,messages):
+        reasoning_content = ""
+        answer_content = ""
+        is_answering = False
+        try:
+            completion = self.config.client.chat.completions.create(
+            model=self.config.model_name,
             messages=messages,
             stream=True,
-        )
+            )
+            for chunk in completion:
+                if self.stop_event.is_set():
+                    raise StopIteration("任务被停止")
 
-        for chunk in completion:
-            # 如果chunk.choices为空，则打印usage
-            if not chunk.choices:
-                print("\nUsage:")
-                print(chunk.usage)
-            else:
-                delta = chunk.choices[0].delta
-                # 打印思考过程
-                if hasattr(delta, 'reasoning_content') and delta.reasoning_content != None:
-                    print(delta.reasoning_content, end='', flush=True)
-                    reasoning_content += delta.reasoning_content
+                # 如果chunk.choices为空，则打印usage
+                if not chunk.choices:
+                    print("\nUsage:")
+                    print(chunk.usage)
                 else:
-                    # 开始回复
-                    if delta.content != "" and is_answering is False:
-                        print("\n" + "=" * 20 + "完整回复" + "=" * 20 + "\n")
-                        is_answering = True
-                    # 打印回复过程
-                    # print(delta.content, end='', flush=True)
-                    answer_content += delta.content
-        return answer_content
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        traceback.print_exc()
-        return None
+                    delta = chunk.choices[0].delta
+                    # 打印思考过程
+                    if hasattr(delta, 'reasoning_content') and delta.reasoning_content != None:
+                        print(delta.reasoning_content, end='', flush=True)
+                        reasoning_content += delta.reasoning_content
+                    else:
+                        # 开始回复
+                        if delta.content != "" and is_answering is False:
+                            print("\n" + "=" * 20 + "完整回复" + "=" * 20 + "\n")
+                            is_answering = True
+                        answer_content += delta.content
+                        
+            print(answer_content)        
+            return QueryStatus.SUCCESS
+        
+        except StopIteration as e:
+            print(f"Error occurred: {e}")
+            return QueryStatus.STOPPED
 
-def ask_thread_func(prompt):
-    messages = [{"role": "user", "content": prompt}]
-    print("⏳ 正在分析，请稍候...")
-    result = ask(messages)
-    if result:
-        print("\r✅ 分析完成！")
-        print(result)
-    else:
-        print("\r❌ 分析失败，请重试")
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            traceback.print_exc()
+            return QueryStatus.FAILED
+        
+#处理用户接口
+class AnalysisHandler:
 
-class AIAnalysisPlugin(idaapi.plugin_t):
+    def __init__(self):
+        self.disassembler = DisassemblyProcessor()
+        self.ai_service = AIService()
+        self.ai_isRunning = Lock()
+        self.prompt = """
+你是一名人工智能逆向工程专家。
+我会提供你一些反汇编代码，其中首个函数是你需要分析并总结成报告的函数，
+其余函数是该函数调用的一些子函数。
+分析要求：
+重点描述主函数功能，并对核心行为进行推测；
+简要描述子函数功能
+
+输出要求：
+主函数功能：...
+行为推测：...
+子函数功能：...
+纯文本输出。
+
+下面是你要分析的反汇编代码：
+"""
+    def set_analysis_depth(self, depth):
+        self.disassembler.max_depth = depth
+    
+    def _create_analysis_prompt(self, disassembly):
+        return self.prompt + disassembly
+    
+    def _create_analysis_custom_query(self, disassembly,question):
+        return question + disassembly
+    
+    def create_ai_task(self,taskType,question=""):
+
+        match taskType:
+            case TaskType.ANALYSIS:
+                disassembly = self.disassembler.get_current_function_disasm()
+                prompt = self._create_analysis_prompt(disassembly)
+                self.async_task(prompt)
+            case TaskType.CUSTOM_QUERY:
+                self.async_task(question)    
+            case TaskType.CUSTON_QUERY_WITH_CODE:
+                disassembly = self.disassembler.get_current_function_disasm()
+                prompt = self._create_analysis_custom_query(disassembly,question)
+                self.async_task(prompt)
+        
+        
+    def async_task(self,question):
+        print(question)
+        if self.ai_isRunning.acquire(blocking=False):
+            task = Thread(target=self.ai_service.ask_ai,args=(question,self.ai_isRunning,)) 
+            task.start()
+            
+        else:
+            print("\r❌ 当前AI正在处理任务,请稍后尝试")
+    
+    def stop(self):
+        self.ai_service.stop_event.set()
+
+#处理插件框架
+class ComprehendAIPlugin(idaapi.plugin_t):
     flags = idaapi.PLUGIN_HIDE
     comment = "AI-based Reverse Analysis Plugin"
     help = "Perform AI-based analysis on binary code"
     wanted_name = "ComprehendAI"
     wanted_hotkey = "Ctrl+Shift+A"
 
+    ACTION_DEFINITIONS = [
+        ("AI_analysis:Analysis", "Analysis", "执行非阻塞型AI分析"),
+        ("AI_analysis:SetDepth", "Set analysis depth", "设置分析深度"),
+        ("AI_analysis:SetPrompt", "Set your own prompt", "自定义prompt"),
+        ("AI_analysis:CustomQueryWithCode", "Ask AI with code", "结合代码自定义提问"),
+        ("AI_analysis:CustomQuery", "Ask AI", "自定义提问"),
+        ("AI_analysis:Stop", "Stop", "停止"),
+    ]
+
     def init(self):
-        actions = [
-            idaapi.action_desc_t(ACTION_ANALYSIS_1, "Non-blocking ComprehendAI", MenuHandler(ACTION_ANALYSIS_1), None, "非堵塞型AI分析", 0),
-            idaapi.action_desc_t(ACTION_ANALYSIS_2, "Blocking ComprehendAI", MenuHandler(ACTION_ANALYSIS_2), None, "堵塞型AI分析", 0),
-            idaapi.action_desc_t(ACTION_SETDEPTH, "Set analysis depth", MenuHandler(ACTION_SETDEPTH), None, "设置函数分析深度", 0),
-            idaapi.action_desc_t(ACTION_ASK, "Ask AI", MenuHandler(ACTION_ASK), None, "手动输入任意问题", 0)
-        ]
-        
-        for action in actions:
-            idaapi.register_action(action)
-
-        self.ui_hook = MenuHook()
+        self.ui_hook = self.MenuHook()
         self.ui_hook.hook()
-
-        print("ComprehendAI plugin initialized")
+        
+        self.handler = AnalysisHandler()
+        self._register_actions()
+        
+        print("ComprehendAI initialized")
         return idaapi.PLUGIN_KEEP
 
     def run(self, arg):
@@ -151,106 +267,63 @@ class AIAnalysisPlugin(idaapi.plugin_t):
 
     def term(self):
         self.ui_hook.unhook()
-        for action in [ACTION_ANALYSIS_1, ACTION_ANALYSIS_2, ACTION_SETDEPTH, ACTION_ASK]:
-            idaapi.unregister_action(action)
-        print("ComprehendAI plugin unloaded")
+        self._unregister_actions()
+        print("ComprehendAI unloaded")
 
-class MenuHook(UI_Hooks):
-    def finish_populating_widget_popup(self, form, popup):
-        widget_type = idaapi.get_widget_type(form)
-        if widget_type in (idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE):
-            actions = [ACTION_ANALYSIS_1, ACTION_ANALYSIS_2, ACTION_SETDEPTH, ACTION_ASK]
-            for action in actions:
-                idaapi.attach_action_to_popup(form, popup, action, "ComprehendAI/", idaapi.SETMENU_APP)
+    def _register_actions(self):
+        for action_id, label, tooltip in self.ACTION_DEFINITIONS:
+            action_desc = idaapi.action_desc_t(
+                action_id,
+                label,
+                self.MenuCommandHandler(action_id,self.handler),
+                None,
+                tooltip,
+                0
+            )
+            idaapi.register_action(action_desc)
 
-class MenuHandler(action_handler_t):
-    def __init__(self, action):
-        super().__init__()
-        self.action = action
+    def _unregister_actions(self):
+        for action_id, _, _ in self.ACTION_DEFINITIONS:
+            idaapi.unregister_action(action_id)
 
-    def activate(self, ctx):
-        if self.action == ACTION_ANALYSIS_1:
-            self.non_blocking_analysis()
-        elif self.action == ACTION_ANALYSIS_2:
-            self.blocking_analysis()
-        elif self.action == ACTION_SETDEPTH:
-            self.set_depth()
-        elif self.action == ACTION_ASK:
-            self.ask_question()
-        return 1
+    class MenuHook(UI_Hooks):
+        def finish_populating_widget_popup(self, form, popup):
+            if idaapi.get_widget_type(form) in (idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE):
+                for action_id, _, _ in ComprehendAIPlugin.ACTION_DEFINITIONS:
+                    idaapi.attach_action_to_popup(form, popup, action_id, "ComprehendAI/", idaapi.SETMENU_APP)
 
-    def update(self, ctx):
-        return idaapi.AST_ENABLE_ALWAYS
+    class MenuCommandHandler(action_handler_t):
+        def __init__(self, action_id,handler:AnalysisHandler):
+            super().__init__()
+            self.action_id = action_id
+            self.handler = handler
+    
+        def activate(self, ctx):     
 
-    def non_blocking_analysis(self):
-        disasm_all = get_this_func_disasm(depth)
-        prompt = f"""
-你是一名人工智能逆向工程专家。
-我会提供你一些反汇编代码，其中首个函数是你需要分析并总结成报告的函数，
-其余函数是该函数调用的一些子函数。
-分析要求：
-重点描述主函数功能，并对核心行为进行推测；
-简要描述子函数功能
+            match self.action_id:
+                case "AI_analysis:Analysis":
+                    self.handler.create_ai_task(TaskType.ANALYSIS)
+                case "AI_analysis:CustomQuery":
+                    question = idaapi.ask_text(0, "", "输入问题")
+                    if question:
+                        self.handler.create_ai_task(TaskType.CUSTOM_QUERY, question)
+                case "AI_analysis:SetDepth":
+                    new_depth = idaapi.ask_long(2, "设置分析深度 (默认2):")
+                    if new_depth is not None:
+                        self.handler.set_analysis_depth(new_depth)       
+                case "AI_analysis:SetPrompt":
+                    yourPrompt = idaapi.ask_text(0, f"{self.handler.prompt}", "输入问题")
+                    self.handler.prompt = yourPrompt
+                case "AI_analysis:CustomQueryWithCode":
+                    question = idaapi.ask_text(0, "", "输入问题")
+                    if question:
+                        self.handler.create_ai_task(TaskType.CUSTON_QUERY_WITH_CODE, question)
+                case "AI_analysis:Stop":
+                    self.handler.stop()
+            return 1
 
-输出要求：
-主函数功能：...
-行为推测：...
-子函数功能：...
-纯文本输出。
-
-下面是你要分析的反汇编代码：
-{disasm_all}
-"""
-        print(f"prompt:{prompt}")
-        t = Thread(target=ask_thread_func, args=(prompt,))
-        t.start()
-
-    def blocking_analysis(self):
-        disasm_all = get_this_func_disasm(depth)
-        prompt = f"""
-你是一名人工智能逆向工程专家。
-我会提供你一些反汇编代码，其中首个函数是你需要分析并总结成报告的函数，
-其余函数是该函数调用的一些子函数。
-分析要求：
-重点描述主函数功能，并对核心行为进行推测；
-简要描述子函数功能
-
-输出要求：
-主函数功能：...
-行为推测：...
-子函数功能：...
-纯文本输出。
-
-下面是你要分析的反汇编代码：
-{disasm_all}
-"""
-        print(f"prompt:{prompt}")
-        messages = [{"role": "user", "content": prompt}]
-        print("⏳ 正在分析，请稍候...")
-        idaapi.show_wait_box("⏳ 正在分析，请稍候...")
-        result = ask(messages)
-        if result:
-            print("\r✅ 分析完成！")
-            print(result)
-            idc.set_func_cmt(idc.get_screen_ea(), result, 1)
-            idaapi.hide_wait_box()
-        else:
-            print("\r❌ 分析失败，请重试")
-
-    def set_depth(self):
-        global depth
-        new_depth = idaapi.ask_long(2, "设置函数分析深度（默认为2）：")
-        if new_depth is not None:
-            depth = new_depth
-
-    def ask_question(self):
-        prompt = idaapi.ask_text(0, "", "输入问题")
-        if prompt:
-            t = Thread(target=ask_thread_func, args=(prompt,))
-            t.start()
+        def update(self, ctx):
+            return idaapi.AST_ENABLE_ALWAYS
 
 def PLUGIN_ENTRY():
-    return AIAnalysisPlugin()
-
-
-
+    return ComprehendAIPlugin()
